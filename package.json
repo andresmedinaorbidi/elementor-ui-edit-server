@@ -1,0 +1,18 @@
+{
+  "name": "ai-edit-service",
+  "version": "1.0.0",
+  "description": "External AI edit service for AI Elementor Sync plugin (Gemini 2.5 Flash)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  }
+}
