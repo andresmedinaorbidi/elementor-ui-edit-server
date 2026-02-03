@@ -1,5 +1,16 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
+const KIT_SYSTEM_PROMPT = `You are a theme/kit editor for Elementor. You receive:
+1. **kit_settings** — Object with:
+   - **colors** (array): System colors. Each item has _id (e.g. "primary", "secondary"), title, and value (hex string, e.g. "#1e3a5f").
+   - **typography** (array): System typography. Each item has _id (e.g. "primary", "text"), title, and typography_* fields (typography_font_family, typography_font_size with { unit, size }, typography_font_weight, typography_line_height, typography_letter_spacing, etc.).
+2. **User instruction** — Natural language (e.g. "Make primary color darker blue", "Use Roboto for headings").
+
+Output: A single JSON object with optional "colors" and "typography" arrays. Include ONLY the items you want to change.
+- **colors**: Each object MUST have _id (preserve from request), title, and value (hex string, e.g. "#0d1f36"). Omit colors array or use [] if no color changes.
+- **typography**: Each object MUST have _id (preserve from request). Include title if you have it, and only the typography_* fields you want to set (e.g. typography_font_family, typography_font_size, typography_font_weight). For font_size use object: { "unit": "px", "size": number }. Omit typography array or use [] if no typography changes.
+Return ONLY valid JSON: { "colors": [...], "typography": [...] } or {} or { "colors": [], "typography": [] }. No markdown, no explanation.`;
+
 const SYSTEM_PROMPT = `You are a precise editor. You receive:
 1. **Dictionary** — JSON array of text/link slots. Each entry has: id, path, widget_type, optional field, text, and optional link_url. If link_url is present, you may return a link edit for that slot (new_url or new_link with url, optional is_external, nofollow).
 2. **Image slots** (when provided) — JSON array of image/background slots: { id, path, slot_type, el_type, image_url, image_id? }. You may return image edits for these by id or path using new_image_url and/or new_attachment_id, or new_image: { url?, id? }.
@@ -29,7 +40,15 @@ function buildPrompt(dictionary, instruction, image_slots = [], edit_capabilitie
 }
 
 /**
- * Call Gemini and return raw text (expected to be a JSON array string).
+ * Build prompt for kit (theme) edit: kit_settings + instruction.
+ */
+function buildKitPrompt(kit_settings, instruction) {
+  const userPart = `kit_settings:\n${JSON.stringify(kit_settings)}\n\nUser instruction: ${instruction}`;
+  return `${KIT_SYSTEM_PROMPT}\n\n${userPart}`;
+}
+
+/**
+ * Call Gemini and return raw text (expected to be a JSON array string for edits, or JSON object for kit).
  */
 async function callGemini(prompt) {
   const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -130,4 +149,55 @@ function parseEditsFromLLM(raw, dictionary, image_slots = [], edit_capabilities 
     .filter((e) => e.id !== '' || e.path !== '');
 }
 
-module.exports = { buildPrompt, callGemini, parseEditsFromLLM };
+/**
+ * Parse LLM output into kit_patch: { colors?, typography? }.
+ * Preserves _id and title; validates color value is hex-like; allows typography_* fields.
+ * Throws if raw is not valid JSON or structure is wrong.
+ */
+function parseKitPatchFromLLM(raw) {
+  let text = (raw || '').trim();
+  const codeBlock = /^```(?:json)?\s*([\s\S]*?)```\s*$/;
+  const match = text.match(codeBlock);
+  if (match) text = match[1].trim();
+
+  let obj;
+  try {
+    obj = JSON.parse(text);
+  } catch {
+    throw new Error('Invalid LLM response for kit');
+  }
+  if (obj == null || typeof obj !== 'object') throw new Error('Invalid LLM response for kit');
+
+  const kit_patch = {};
+  if (Array.isArray(obj.colors) && obj.colors.length > 0) {
+    kit_patch.colors = obj.colors
+      .filter((c) => c && typeof c === 'object' && c._id != null)
+      .map((c) => ({
+        _id: String(c._id),
+        title: c.title != null ? String(c.title) : '',
+        value: typeof c.value === 'string' ? c.value.trim() : (c.value != null ? String(c.value) : '')
+      }))
+      .filter((c) => c.value !== '');
+  }
+  if (Array.isArray(obj.typography) && obj.typography.length > 0) {
+    kit_patch.typography = obj.typography
+      .filter((t) => t && typeof t === 'object' && t._id != null)
+      .map((t) => {
+        const out = { _id: String(t._id) };
+        if (t.title != null) out.title = String(t.title);
+        Object.keys(t).forEach((k) => {
+          if (k !== '_id' && k !== 'title' && k.startsWith('typography_') && t[k] !== undefined && t[k] !== null) {
+            out[k] = t[k];
+          }
+        });
+        return out;
+      })
+      .filter((t) => Object.keys(t).length > 1);
+  }
+  if (obj.settings != null && typeof obj.settings === 'object') {
+    kit_patch.settings = obj.settings;
+  }
+  return kit_patch;
+}
+
+module.exports = { buildPrompt, buildKitPrompt, callGemini, parseEditsFromLLM, parseKitPatchFromLLM };

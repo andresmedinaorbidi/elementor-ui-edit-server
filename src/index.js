@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { requireAuth } = require('./middleware/auth');
-const { buildPrompt, callGemini, parseEditsFromLLM } = require('./llm');
+const { buildPrompt, buildKitPrompt, callGemini, parseEditsFromLLM, parseKitPatchFromLLM } = require('./llm');
 
 const app = express();
 app.use(express.json());
@@ -19,14 +19,43 @@ app.get('/health', (_req, res) => {
 
 app.post('/edits', async (req, res) => {
   const requestId = Math.random().toString(36).slice(2, 10);
-  const {
-    dictionary,
-    instruction,
-    image_slots = [],
-    edit_capabilities = ['text']
-  } = req.body || {};
+  const body = req.body || {};
+  const { context_type, instruction } = body;
 
   console.log(`[${requestId}] POST /edits - request received`);
+  if (context_type === 'kit') {
+    // --- Kit (theme) edit ---
+    const { kit_settings = {} } = body;
+    console.log(`[${requestId}] POST /edits - kit edit, instruction length:`, instruction?.length);
+
+    if (typeof instruction !== 'string' || !instruction.trim()) {
+      console.warn(`[${requestId}] POST /edits - kit: validation failed: missing instruction`);
+      return res.status(200).json({ error: 'Missing instruction for kit edit' });
+    }
+    const ks = typeof kit_settings === 'object' && kit_settings !== null ? kit_settings : {};
+    const colors = Array.isArray(ks.colors) ? ks.colors : [];
+    const typography = Array.isArray(ks.typography) ? ks.typography : [];
+    const normalizedKitSettings = { colors, typography };
+
+    try {
+      const prompt = buildKitPrompt(normalizedKitSettings, instruction.trim());
+      const raw = await callGemini(prompt);
+      const kit_patch = parseKitPatchFromLLM(raw);
+      console.log(`[${requestId}] POST /edits - kit success, kit_patch keys:`, Object.keys(kit_patch));
+      return res.status(200).json({ kit_patch });
+    } catch (e) {
+      console.error(`[${requestId}] POST /edits - kit error:`, e.message);
+      return res.status(200).json({ error: e.message || 'Kit LLM request failed' });
+    }
+  }
+
+  // --- Page/template edit ---
+  const {
+    dictionary,
+    image_slots = [],
+    edit_capabilities = ['text']
+  } = body;
+
   console.log(`[${requestId}] POST /edits - input:`, JSON.stringify({ dictionary, instruction, image_slots: image_slots?.length, edit_capabilities }));
 
   if (!Array.isArray(dictionary) || typeof instruction !== 'string' || !instruction.trim()) {
