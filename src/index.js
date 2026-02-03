@@ -1,10 +1,13 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const { requireAuth } = require('./middleware/auth');
 const { buildPrompt, buildKitPrompt, callGemini, parseEditsFromLLM, parseKitPatchFromLLM } = require('./llm');
+const { addRequest, getRequests } = require('./store');
 
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const PORT = process.env.PORT || 3000;
 
@@ -30,6 +33,7 @@ app.post('/edits', async (req, res) => {
 
     if (typeof instruction !== 'string' || !instruction.trim()) {
       console.warn(`[${requestId}] POST /edits - kit: validation failed: missing instruction`);
+      addRequest(requestId, body, { error: 'Missing instruction for kit edit' }, 'kit');
       return res.status(200).json({ error: 'Missing instruction for kit edit' });
     }
     const ks = typeof kit_settings === 'object' && kit_settings !== null ? kit_settings : {};
@@ -42,9 +46,11 @@ app.post('/edits', async (req, res) => {
       const raw = await callGemini(prompt);
       const kit_patch = parseKitPatchFromLLM(raw);
       console.log(`[${requestId}] POST /edits - kit success, kit_patch keys:`, Object.keys(kit_patch));
+      addRequest(requestId, body, { kit_patch }, 'kit');
       return res.status(200).json({ kit_patch });
     } catch (e) {
       console.error(`[${requestId}] POST /edits - kit error:`, e.message);
+      addRequest(requestId, body, { error: e.message || 'Kit LLM request failed' }, 'kit');
       return res.status(200).json({ error: e.message || 'Kit LLM request failed' });
     }
   }
@@ -60,6 +66,7 @@ app.post('/edits', async (req, res) => {
 
   if (!Array.isArray(dictionary) || typeof instruction !== 'string' || !instruction.trim()) {
     console.warn(`[${requestId}] POST /edits - validation failed: missing dictionary or instruction`);
+    addRequest(requestId, body, { error: 'Missing dictionary or instruction' }, 'page');
     return res.status(200).json({ error: 'Missing dictionary or instruction' });
   }
   const imageSlots = Array.isArray(image_slots) ? image_slots : [];
@@ -74,12 +81,22 @@ app.post('/edits', async (req, res) => {
     const edits = parseEditsFromLLM(raw, dictionary, imageSlots, capabilities);
     console.log(`[${requestId}] POST /edits - success, edits count:`, edits.length);
     console.log(`[${requestId}] POST /edits - output:`, JSON.stringify({ edits }));
+    addRequest(requestId, body, { edits }, 'page');
     return res.status(200).json({ edits });
   } catch (e) {
     console.error(`[${requestId}] POST /edits - error:`, e.message);
     console.error(`[${requestId}] POST /edits - stack:`, e.stack);
+    addRequest(requestId, body, { error: e.message || 'LLM request failed' }, 'page');
     return res.status(200).json({ error: e.message || 'LLM request failed' });
   }
+});
+
+app.get('/api/requests', (_req, res) => {
+  res.status(200).json(getRequests());
+});
+
+app.get('/admin', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
 });
 
 app.listen(PORT, () => {

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin – Elementor LLM AI Service</title>
+  <style>
+    :root {
+      --bg: #1a1d23;
+      --surface: #242830;
+      --border: #3d434e;
+      --text: #e6e9ef;
+      --text-muted: #9099b3;
+      --accent: #7c9ce0;
+      --success: #96d6a4;
+      --error: #e07d7d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 1.5rem 2rem;
+      line-height: 1.5;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    .meta {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+    }
+    section {
+      margin-bottom: 2rem;
+    }
+    section h2 {
+      font-size: 1.125rem;
+      margin: 0 0 0.75rem;
+      color: var(--accent);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    tr:last-child td { border-bottom: none; }
+    tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+    tbody tr:hover { background: rgba(255,255,255,0.04); }
+    .mono { font-family: ui-monospace, monospace; font-size: 0.8125rem; }
+    .truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .toggle {
+      background: none;
+      border: none;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 0.875rem;
+      padding: 0;
+    }
+    .toggle:hover { text-decoration: underline; }
+    .details-cell { padding: 0; }
+    .details-inner {
+      padding: 0.75rem;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+    }
+    .details-inner table { background: var(--bg); }
+    .details-inner th, .details-inner td { padding: 0.4rem 0.6rem; font-size: 0.8125rem; }
+    .json-block {
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 200px;
+      overflow: auto;
+      padding: 0.5rem;
+      background: var(--bg);
+      border-radius: 4px;
+      margin-top: 0.5rem;
+    }
+    .summary-ok { color: var(--success); }
+    .summary-err { color: var(--error); }
+    .placeholder {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 1.5rem;
+      text-align: center;
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px dashed var(--border);
+    }
+    .empty { color: var(--text-muted); font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Elementor LLM AI Service – Admin</h1>
+  <p class="meta">Last updated: <span id="lastUpdated">—</span> · Auto-refresh every 3s</p>
+
+  <section>
+    <h2>Incoming requests</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Request ID</th>
+          <th>Context type</th>
+          <th>Instruction</th>
+          <th>Body</th>
+        </tr>
+      </thead>
+      <tbody id="requestsBody">
+        <tr><td colspan="5" class="empty">No requests yet.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Output / Applied changes</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Request ID</th>
+          <th>Type</th>
+          <th>Summary</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="outputBody">
+        <tr><td colspan="5" class="empty">No output yet.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Connected sites</h2>
+    <p class="placeholder">Sites connected to this service will appear here. (Coming in a future update.)</p>
+  </section>
+
+  <script>
+    const POLL_INTERVAL_MS = 3000;
+
+    function formatTime(iso) {
+      try {
+        const d = new Date(iso);
+        return d.toLocaleTimeString() + ' ' + d.toLocaleDateString();
+      } catch (_) { return iso; }
+    }
+
+    function truncate(str, len = 40) {
+      if (str == null) return '—';
+      const s = String(str);
+      return s.length <= len ? s : s.slice(0, len) + '…';
+    }
+
+    function renderRequests(rows) {
+      const tbody = document.getElementById('requestsBody');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">No requests yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map((r, i) => {
+        const inst = r.body && r.body.instruction != null ? r.body.instruction : '—';
+        const bodyId = 'body-' + r.id + '-' + i;
+        return `
+          <tr>
+            <td>${formatTime(r.timestamp)}</td>
+            <td class="mono">${escapeHtml(r.id)}</td>
+            <td>${escapeHtml(r.contextType)}</td>
+            <td class="truncate" title="${escapeAttr(inst)}">${escapeHtml(truncate(inst, 50))}</td>
+            <td>
+              <button type="button" class="toggle" data-target="${bodyId}" aria-expanded="false">Show body</button>
+              <div id="${bodyId}" class="details-inner" hidden>
+                <pre class="json-block">${escapeHtml(JSON.stringify(r.body, null, 2))}</pre>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      tbody.querySelectorAll('.toggle[data-target]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-target');
+          const el = document.getElementById(id);
+          if (!el) return;
+          const isHidden = el.hidden;
+          el.hidden = !isHidden;
+          btn.textContent = isHidden ? 'Hide body' : 'Show body';
+          btn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+        });
+      });
+    }
+
+    function summary(res, contextType) {
+      if (res.error) return { text: 'Error', cls: 'summary-err' };
+      if (res.kit_patch) {
+        const c = (res.kit_patch.colors || []).length;
+        const t = (res.kit_patch.typography || []).length;
+        const parts = [];
+        if (c) parts.push(c + ' color(s)');
+        if (t) parts.push(t + ' typography');
+        return { text: parts.length ? parts.join(', ') : 'Empty patch', cls: 'summary-ok' };
+      }
+      if (Array.isArray(res.edits)) {
+        return { text: res.edits.length + ' edit(s)', cls: 'summary-ok' };
+      }
+      return { text: '—', cls: '' };
+    }
+
+    function detailsCell(r) {
+      const res = r.response;
+      const detailId = 'detail-' + r.id;
+      let inner = '';
+      if (res.error) {
+        inner = `<span class="summary-err">${escapeHtml(res.error)}</span>`;
+      } else if (res.kit_patch) {
+        const colors = res.kit_patch.colors || [];
+        const typography = res.kit_patch.typography || [];
+        let html = '';
+        if (colors.length) {
+          html += '<table><thead><tr><th>_id</th><th>title</th><th>value</th></tr></thead><tbody>';
+          colors.forEach(c => {
+            html += `<tr><td class="mono">${escapeHtml(c._id)}</td><td>${escapeHtml(c.title)}</td><td class="mono">${escapeHtml(c.value)}</td></tr>`;
+          });
+          html += '</tbody></table>';
+        }
+        if (typography.length) {
+          html += '<table style="margin-top:0.5rem"><thead><tr><th>_id</th><th>title</th><th>fields</th></tr></thead><tbody>';
+          typography.forEach(t => {
+            const keys = Object.keys(t).filter(k => k !== '_id' && k !== 'title');
+            html += `<tr><td class="mono">${escapeHtml(t._id)}</td><td>${escapeHtml(t.title || '')}</td><td class="mono">${escapeHtml(JSON.stringify(t).slice(0, 80))}…</td></tr>`;
+          });
+          html += '</tbody></table>';
+        }
+        if (!html) html = '<span class="empty">No changes</span>';
+        inner = html;
+      } else if (Array.isArray(res.edits) && res.edits.length) {
+        inner = '<table><thead><tr><th>id / path</th><th>change type</th><th>value</th></tr></thead><tbody>';
+        res.edits.forEach(e => {
+          const idPath = (e.id || e.path || '—');
+          const types = [];
+          if (e.new_text != null) types.push('new_text');
+          if (e.new_url != null) types.push('new_url');
+          if (e.new_link != null) types.push('new_link');
+          if (e.new_image_url != null || e.new_attachment_id != null || e.new_image != null) types.push('image');
+          const val = e.new_text != null ? truncate(e.new_text, 60) : (e.new_url || (e.new_link && (e.new_link.url || 'link')) || (e.new_image_url && 'image') || '—');
+          inner += `<tr><td class="mono">${escapeHtml(idPath)}</td><td>${escapeHtml(types.join(', ') || '—')}</td><td class="truncate" title="${escapeAttr(val)}">${escapeHtml(val)}</td></tr>`;
+        });
+        inner += '</tbody></table>';
+      } else {
+        inner = '<span class="empty">No changes</span>';
+      }
+      return `<button type="button" class="toggle" data-target="${detailId}" aria-expanded="false">Show details</button><div id="${detailId}" class="details-inner" hidden>${inner}</div>`;
+    }
+
+    function renderOutput(rows) {
+      const tbody = document.getElementById('outputBody');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">No output yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map((r, i) => {
+        const s = summary(r.response, r.contextType);
+        return `
+          <tr>
+            <td>${formatTime(r.timestamp)}</td>
+            <td class="mono">${escapeHtml(r.id)}</td>
+            <td>${escapeHtml(r.contextType)}</td>
+            <td class="${s.cls}">${escapeHtml(s.text)}</td>
+            <td class="details-cell">${detailsCell(r)}</td>
+          </tr>
+        `;
+      });
+
+      tbody.querySelectorAll('.toggle[data-target]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-target');
+          const el = document.getElementById(id);
+          if (!el) return;
+          const isHidden = el.hidden;
+          el.hidden = !isHidden;
+          btn.textContent = isHidden ? 'Hide details' : 'Show details';
+          btn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+    function escapeAttr(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function fetchAndRender() {
+      fetch('/api/requests')
+        .then(res => res.ok ? res.json() : [])
+        .then(rows => {
+          renderRequests(rows);
+          renderOutput(rows);
+          document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+        })
+        .catch(() => {
+          document.getElementById('lastUpdated').textContent = 'Error fetching';
+        });
+    }
+
+    fetchAndRender();
+    setInterval(fetchAndRender, POLL_INTERVAL_MS);
+  </script>
+</body>
+</html>
