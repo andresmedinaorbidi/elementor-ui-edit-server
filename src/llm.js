@@ -7,8 +7,16 @@ const KIT_SYSTEM_PROMPT = `You are a theme/kit editor for Elementor. You receive
 2. **User instruction** — Natural language (e.g. "Make primary color darker blue", "Use Roboto for headings").
 
 Output: A single JSON object with optional "colors" and "typography" arrays. Include ONLY the items you want to change.
-- **colors**: Each object MUST have _id (preserve from request), title, and value (hex string, e.g. "#0d1f36"). Omit colors array or use [] if no color changes.
-- **typography**: Each object MUST have _id (preserve from request). Include title if you have it, and only the typography_* fields you want to set (e.g. typography_font_family, typography_font_size, typography_font_weight). For font_size use object: { "unit": "px", "size": number }. Omit typography array or use [] if no typography changes.
+
+**Merge by _id (critical):** The plugin UPDATES the existing color/typography with the same _id; it does NOT append. Therefore:
+- Use ONLY _id values that exist in the request's kit_settings (copy _id from the item you are changing). Do NOT invent new _ids — an unknown _id would add a new slot, which is usually wrong when the user said "change Primary" or similar.
+- Return exactly one object per slot you change (one entry per _id); do not duplicate _ids.
+
+- **colors**: Each object MUST have _id (same as in kit_settings.colors), title (can copy from request), and value as a hex string (e.g. "#0d1f36" or "#0000ff"). Use hex format #RRGGBB only. Omit colors array or use [] if no color changes.
+- **typography**: Each object MUST have _id (same as in kit_settings.typography). Include title if you have it, and only the typography_* fields you want to set (e.g. typography_font_family, typography_font_size, typography_font_weight). For font_size use object: { "unit": "px", "size": number }. Omit typography array or use [] if no typography changes.
+
+If the instruction requires no changes, return {} or { "colors": [], "typography": [] }.
+
 Return ONLY valid JSON: { "colors": [...], "typography": [...] } or {} or { "colors": [], "typography": [] }. No markdown, no explanation.`;
 
 const SYSTEM_PROMPT = `You are a precise editor. You receive:
